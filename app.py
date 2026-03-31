@@ -1,8 +1,10 @@
 import telebot
+from telebot import types
 import requests
 import concurrent.futures
 import re
 import os
+import time
 
 # Apnar dewa Telegram Bot API Token
 TOKEN = "8631817008:AAGAsL4KdAU-kegg9kGA-dwJmk5Q53jKuX0"
@@ -40,22 +42,51 @@ def check_email(email):
     
     return None
 
+# Inline Keyboard UI toiri korar function
+def get_control_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_process = types.InlineKeyboardButton("🚀 Process Now", callback_data="process_emails")
+    btn_clear = types.InlineKeyboardButton("🗑️ Clear List", callback_data="clear_buffer")
+    markup.add(btn_process, btn_clear)
+    return markup
+
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "Welcome! Send me the emails you want to check. You can send them one by one or as a bulk list.\n\nType 'done' when you are finished sending emails.")
+    welcome_text = (
+        "👋 <b>Welcome to the Mail Checker Bot!</b>\n\n"
+        "Send me the emails you want to check. You can send them one by one or as a bulk list.\n\n"
+        "<i>When you are ready, click the 'Process Now' button below or type 'done'.</i>"
+    )
+    bot.reply_to(message, welcome_text, parse_mode="HTML")
     user_buffers[message.chat.id] = set()
 
+# 'done' text er command
 @bot.message_handler(func=lambda message: message.text.lower().strip() == 'done')
-def process_emails(message):
-    chat_id = message.chat.id
-    
+def trigger_process_text(message):
+    execute_checking(message.chat.id)
+
+# Inline buttons er click handle korar logic
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback_query(call):
+    chat_id = call.message.chat.id
+    if call.data == "process_emails":
+        bot.answer_callback_query(call.id, "Starting the check...")
+        execute_checking(chat_id)
+    elif call.data == "clear_buffer":
+        user_buffers[chat_id] = set()
+        bot.answer_callback_query(call.id, "Buffer cleared!")
+        bot.edit_message_text("🗑️ <b>Your email list has been cleared.</b> Send new emails to start again.", 
+                              chat_id, call.message.message_id, parse_mode="HTML")
+
+def execute_checking(chat_id):
     if chat_id not in user_buffers or len(user_buffers[chat_id]) == 0:
-        bot.reply_to(message, "Your buffer is empty. Please send some emails first.")
+        bot.send_message(chat_id, "⚠️ <b>Your list is empty.</b> Please send some emails first.", parse_mode="HTML")
         return
     
     emails_to_check = list(user_buffers[chat_id])
-    bot.reply_to(message, f"Processing {len(emails_to_check)} emails. Please wait, this might take a while...")
+    status_msg = bot.send_message(chat_id, f"⏳ <b>Processing {len(emails_to_check)} emails...</b>\n<i>Please wait, this might take a while depending on the list size.</i>", parse_mode="HTML")
     
+    start_time = time.time()
     available_emails = []
     
     # ThreadPoolExecutor use kore eksathe multiple mail check kora hocche
@@ -64,23 +95,30 @@ def process_emails(message):
         for res in results:
             if res:
                 available_emails.append(res)
+                
+    elapsed_time = round(time.time() - start_time, 2)
     
     # Check sesh hobar por output dewa hocche
     if available_emails:
-        response_text = "Available Emails:\n" + "\n".join(available_emails)
+        # Special Feature: HTML <code> tag use koray mail gulo 1-click a copy hobe
+        response_text = f"✅ <b>Checking Completed!</b>\n⏱️ <b>Time Taken:</b> {elapsed_time}s\n🎯 <b>Available:</b> {len(available_emails)}/{len(emails_to_check)}\n\n"
+        response_text += "👇 <b>Available Emails (Tap to copy):</b>\n\n"
+        response_text += "\n".join([f"<code>{email}</code>" for email in available_emails])
         
         # Jodi email list onek boro hoy (Telegram limit er theke beshi), tahole text file e dibe
         if len(response_text) > 4000:
             filename = f"available_emails_{chat_id}.txt"
             with open(filename, "w") as f:
-                f.write(response_text)
+                f.write("\n".join(available_emails))
             with open(filename, "rb") as f:
-                bot.send_document(chat_id, f)
+                caption_text = f"✅ <b>Checking Completed!</b>\n⏱️ Time: {elapsed_time}s\n🎯 Available: {len(available_emails)}\n\n<i>List is too long, so I've sent it as a file.</i>"
+                bot.send_document(chat_id, f, caption=caption_text, parse_mode="HTML")
             os.remove(filename) # Pathanor por file delete kore dibe
+            bot.delete_message(chat_id, status_msg.message_id) # Process msg delete
         else:
-            bot.send_message(chat_id, response_text)
+            bot.edit_message_text(response_text, chat_id, status_msg.message_id, parse_mode="HTML")
     else:
-        bot.send_message(chat_id, "Checking completed. No available emails found.")
+        bot.edit_message_text(f"❌ <b>Checking Completed!</b>\n⏱️ <b>Time:</b> {elapsed_time}s\n\nNo available emails found out of {len(emails_to_check)} checked.", chat_id, status_msg.message_id, parse_mode="HTML")
         
     # Processing sesh, buffer clear kore dicchi
     user_buffers[chat_id] = set()
@@ -96,12 +134,17 @@ def buffer_emails(message):
     extracted_emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', message.text)
     
     if extracted_emails:
-        user_buffers[chat_id].update(extracted_emails) # Duplicate remove korar jonno set use kora hoyeche
-        bot.reply_to(message, f"Added {len(extracted_emails)} valid emails. Total in buffer: {len(user_buffers[chat_id])}.\n\nSend more emails or type 'done' to start checking.")
+        user_buffers[chat_id].update(extracted_emails)
+        bot.reply_to(message, 
+                     f"✅ <b>Added {len(extracted_emails)} valid emails!</b>\n"
+                     f"📦 <b>Total in buffer:</b> {len(user_buffers[chat_id])}\n\n"
+                     f"<i>Send more emails or use the buttons below to act.</i>", 
+                     parse_mode="HTML", 
+                     reply_markup=get_control_keyboard())
     else:
-        bot.reply_to(message, "No valid emails found in your message. Please send proper emails or type 'done' to start.")
+        bot.reply_to(message, "⚠️ No valid emails found in your message. Please send proper emails.")
 
 if __name__ == '__main__':
-    print("Bot is running...")
+    print("Bot is running with UI and special features...")
     # VPS e always run korar jonno infinity_polling() use kora hoyeche
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
