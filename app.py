@@ -63,13 +63,13 @@ def get_control_keyboard():
 def send_welcome(message):
     welcome_text = (
         "👋 <b>Welcome to the Pro Mail Checker Bot!</b>\n\n"
-        "Send me the emails you want to check. You can send them one by one or as a bulk list.\n\n"
+        "Send me the emails you want to check. You can send them one by one, as a bulk list, or <b>upload a .txt file</b>.\n\n"
         "<i>When you are ready, click the 'Process Now' button below or type 'done'.</i>"
     )
     bot.reply_to(message, welcome_text, parse_mode="HTML")
     get_session(message.chat.id) # Initialize session
 
-@bot.message_handler(func=lambda message: message.text.lower().strip() == 'done')
+@bot.message_handler(func=lambda message: message.text.lower().strip() == 'done' if message.text else False)
 def trigger_process_text(message):
     execute_checking(message.chat.id)
 
@@ -92,7 +92,7 @@ def handle_callback_query(call):
         user_data['emails'].clear()
         bot.answer_callback_query(call.id, "Buffer cleared!")
         try:
-            bot.edit_message_text("🗑️ <b>Your email list has been cleared.</b> Send new emails to start again.", 
+            bot.edit_message_text("🗑️ <b>Your email list has been cleared.</b> Send new emails or .txt files to start again.", 
                                   chat_id, call.message.message_id, parse_mode="HTML")
         except:
             pass # Ignore if message is exactly the same
@@ -101,7 +101,7 @@ def execute_checking(chat_id):
     user_data = get_session(chat_id)
     
     if not user_data['emails']:
-        bot.send_message(chat_id, "⚠️ <b>Your list is empty.</b> Please send some emails first.", parse_mode="HTML")
+        bot.send_message(chat_id, "⚠️ <b>Your list is empty.</b> Please send some emails or a .txt file first.", parse_mode="HTML")
         return
         
     if user_data['is_processing']:
@@ -191,7 +191,51 @@ def execute_checking(chat_id):
         )
         bot.edit_message_text(fail_text, chat_id, status_msg.message_id, parse_mode="HTML")
 
-@bot.message_handler(func=lambda message: True)
+# Text file input handle korar logic
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    chat_id = message.chat.id
+    user_data = get_session(chat_id)
+    
+    if user_data['is_processing']:
+        bot.reply_to(message, "⚠️ <b>Please wait!</b> I am currently processing your previous list.", parse_mode="HTML")
+        return
+
+    # Check jodi file ti .txt na hoy
+    if not message.document.file_name.endswith('.txt'):
+        bot.reply_to(message, "⚠️ <b>Invalid file format!</b> Please send a <b>.txt</b> file.", parse_mode="HTML")
+        return
+        
+    status_message = bot.reply_to(message, "⏳ <b>Downloading and reading your file...</b>", parse_mode="HTML")
+    
+    try:
+        # File download kora
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # File theke text decode kora
+        file_text = downloaded_file.decode('utf-8', errors='ignore')
+        
+        # Regex diye email gulo khuje ber kora
+        extracted_emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', file_text)
+        
+        if extracted_emails:
+            user_data['emails'].update(extracted_emails)
+            bot.edit_message_text(
+                         f"✅ <b>File processed successfully!</b>\n"
+                         f"📥 <b>Added {len(extracted_emails)} valid emails from file.</b>\n"
+                         f"📦 <b>Total in buffer:</b> {len(user_data['emails'])}\n\n"
+                         f"<i>Send more files/text or use the buttons below to act.</i>", 
+                         chat_id, status_message.message_id,
+                         parse_mode="HTML", 
+                         reply_markup=get_control_keyboard())
+        else:
+            bot.edit_message_text("⚠️ No valid emails found in your file. Please check the file content.", 
+                                  chat_id, status_message.message_id, parse_mode="HTML")
+    except Exception as e:
+        bot.edit_message_text(f"❌ <b>Error reading file:</b> {str(e)}", chat_id, status_message.message_id, parse_mode="HTML")
+
+@bot.message_handler(content_types=['text'])
 def buffer_emails(message):
     chat_id = message.chat.id
     user_data = get_session(chat_id)
@@ -207,12 +251,12 @@ def buffer_emails(message):
         bot.reply_to(message, 
                      f"✅ <b>Added {len(extracted_emails)} valid emails!</b>\n"
                      f"📦 <b>Total in buffer:</b> {len(user_data['emails'])}\n\n"
-                     f"<i>Send more emails or use the buttons below to act.</i>", 
+                     f"<i>Send more emails/files or use the buttons below to act.</i>", 
                      parse_mode="HTML", 
                      reply_markup=get_control_keyboard())
     else:
-        bot.reply_to(message, "⚠️ No valid emails found in your message. Please send proper emails.")
+        bot.reply_to(message, "⚠️ No valid emails found in your message. Please send proper emails or a .txt file.")
 
 if __name__ == '__main__':
-    print("🚀 Pro Bot is running with Live Progress, Memory Files, and Session Pooling...")
+    print("🚀 Pro Bot is running with Document Support, Live Progress, Memory Files, and Session Pooling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=15)
