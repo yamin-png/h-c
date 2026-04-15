@@ -1,0 +1,11 @@
+# requirements.txt
+
+# Core dependencies
+pyTelegramBotAPI==4.22.1
+requests==2.32.3
+
+# For environment variables (recommended)
+python-dotenv==1.0.1
+
+# For better async performance (optional but good)
+aiohttp==3.10.10
